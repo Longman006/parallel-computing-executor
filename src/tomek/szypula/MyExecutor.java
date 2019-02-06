@@ -3,13 +3,14 @@ package tomek.szypula;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 
 public class MyExecutor {
     private int numberOfThreads;
     private boolean isStopped ;
-    private MyWorker[] workerThreads;
+    private volatile MyWorker[] workerThreads;
     private LinkedBlockingQueue<Callable<Double>> queue;
     private volatile boolean exit = false;
     private List<FutureTask<Double>> tasks;
@@ -32,31 +33,68 @@ public class MyExecutor {
 
     public FutureTask<Double> submit(Callable<Double> task){
         synchronized (queue) {
+            FutureTask<Double> futureTask = new FutureTask<Double>(task);
+            tasks.add(futureTask);
             queue.add(task);
             queue.notify();
-            FutureTask<Double> futureTask = new FutureTask<Double>(task);
             return futureTask;
         }
     }
-    public boolean isDone(){
+    public boolean finish(){
         for (FutureTask<Double> futureTask:
             tasks   ) {
-            if(!futureTask.isDone())
+            try {
+                futureTask.get();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } catch (ExecutionException e) {
+                e.printStackTrace();
+            }
+        }
+        return true;
+    }
+    public boolean isDone(){
+        for (FutureTask<Double> task :
+                tasks) {
+
+            if (!task.isDone())
                 return false;
         }
         return true;
     }
-    public synchronized void stop(){
-        this.exit = true;
+    public void shutdown(){
+        exit();
+        for (Thread thread :
+                workerThreads) {
+            workerThreads = null;
+        }
+
+    }
+    public void exit(){
+        this.exit = !this.exit;
+    }
+
+    /**
+     * Deprecated
+     */
+    public void join(){
+        for (Thread thread :
+                workerThreads)
+            try {
+                thread.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
     }
 
     private class MyWorker extends Thread {
 
         @Override
         public void run() {
-            Callable<Double> task;
-            while(!exit) {
-                while (queue.isEmpty()) {
+            while(true) {
+                Callable<Double> task;
+                while (queue.isEmpty() && !exit) {
                     try {
                         synchronized (queue) {
                             queue.wait();
@@ -68,10 +106,11 @@ public class MyExecutor {
                 try {
                     if (task != null)
                         task.call();
-                }catch (Exception e) {
-                    e.printStackTrace();
+                } catch (Exception e) {
                 }
+                if (exit && queue.isEmpty()) return;
             }
+
         }
     }
 }
